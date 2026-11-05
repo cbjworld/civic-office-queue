@@ -1,0 +1,26 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>간부실 통합 대기표</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#f4f6f4;color:#203b32;font:16px/1.5 system-ui,sans-serif}main{max-width:68rem;margin:4vh auto;padding:1rem}header{border-bottom:3px solid #25674d}h1{margin:.25rem 0 1rem}h2{margin:0;font-size:1.3rem}fieldset,article{border:1px solid #cbd8d1;background:white;border-radius:8px;padding:1rem}fieldset{margin:1rem 0}label{display:inline-block;margin:.4rem}input,button{font:inherit;padding:.5rem;border-radius:4px}input{border:1px solid #80948a;max-width:100%}button{background:#175c42;color:white;border:0;cursor:pointer}button:disabled{background:#69766f;cursor:default}section{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(min(100%,15rem),1fr))}.mine{font-weight:700}.called{border:3px solid #bc7124;background:#fff7df}small{color:#4b6356}.err{color:#912d23}</style>
+<main><header><small id="org">직원용 · 내부망</small><h1>간부실 통합 대기표</h1></header><fieldset><legend>대기 등록 정보</legend><label>이름 <input id="name" maxlength="50" required></label><label>소속 (선택) <input id="department" maxlength="80"></label></fieldset>
+<section id="rooms" aria-label="간부실별 대기 현황"></section><p id="message" role="alert"></p><label><input type="checkbox" id="sound"> 호출음 켜기</label><p><small>호출을 받으려면 이 탭을 열어 두세요. 절전 상태에서는 알림이 늦어질 수 있습니다.</small></p></main>
+<script>
+const by=id=>document.getElementById(id), seen=new Set();let client,audio;
+function beep(){if(audio?.state!=='running')return;let o=audio.createOscillator(),g=audio.createGain();o.connect(g);g.connect(audio.destination);g.gain.value=.12;g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+.6);o.start();o.stop(audio.currentTime+.6)}
+by('sound').onchange=async()=>{if(!by('sound').checked)return;try{audio??=new AudioContext();await audio.resume();beep()}catch{by('sound').checked=false;by('message').textContent='호출음을 사용할 수 없습니다.'}};
+function card(dept){
+ let a=document.createElement('article');a.innerHTML='<h2></h2><p class="status">연결 확인 중…</p><p class="mine" role="status"></p><button disabled>연결 중</button><p class="err" role="alert"></p>';a.querySelector('h2').textContent=dept;by('rooms').append(a);
+ const q=k=>a.querySelector(k),button=q('button'),err=q('.err');let state=null,busy=false,seq=0;
+ async function api(action,extra={}){let ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),6500);try{let r=await fetch('/office/'+encodeURIComponent(dept)+'/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:client,...extra}),signal:ctl.signal});let data=await r.json();if(!r.ok)throw Error(typeof data.detail==='string'?data.detail:'처리하지 못했습니다.');return data}finally{clearTimeout(timer)}}
+ function paint(s){state=s;let t=s.ticket,waiting=t?.status==='waiting',called=t?.status==='called'&&localStorage.getItem('ack:'+dept)!==t.id;
+ a.classList.toggle('called',called);document.title=document.querySelector('.called')?'호출되었습니다 · 통합 대기표':'간부실 통합 대기표';
+ q('.status').textContent=[s.status,s.detail,'대기 '+s.count+'명'].filter(Boolean).join(' · ');
+ q('.mine').textContent=called?dept+'로 입장하세요.':waiting?'내 순번: '+s.position+'번째':({cancelled:'대기를 취소했습니다.',removed:'대기 명단에서 제외되었습니다.',called:'호출을 확인했습니다.'}[t?.status]||'');
+ button.textContent=called?'호출 확인':waiting?'대기 취소':'대기 등록';button.disabled=busy||(!called&&!waiting&&s.status==='휴가');
+ if(called&&!seen.has(t.id)){seen.add(t.id);if(by('sound').checked)beep()}}
+ async function refresh(){if(busy)return;let n=++seq;try{let s=await api('state');if(n===seq)paint(s)}catch(e){if(n!==seq)return;state=null;button.disabled=true;button.textContent='등록 불가';q('.status').textContent='연결 안 됨 · '+e.message}}
+ button.onclick=async()=>{if(!state||busy)return;let t=state.ticket;if(t?.status==='called'&&localStorage.getItem('ack:'+dept)!==t.id){localStorage.setItem('ack:'+dept,t.id);paint(state);return}
+ let leave=t?.status==='waiting',name=by('name').value.trim();if(!leave&&!name){by('name').focus();by('name').reportValidity();return}
+ busy=true;++seq;button.disabled=true;err.textContent='';try{let s=await api(leave?'leave':'join',leave?{ticket_id:t.id}:{name,department:by('department').value.trim()});busy=false;paint(s)}catch(e){err.textContent=e.message;busy=false;await refresh()}};
+ (async function poll(){await refresh();setTimeout(poll,2500)})();document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()})}
+(async()=>{try{client=localStorage.getItem('civic-queue:id');if(!client){let b=crypto.getRandomValues(new Uint8Array(16));b[6]=b[6]&15|64;b[8]=b[8]&63|128;let h=Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');client=[h.slice(0,8),h.slice(8,12),h.slice(12,16),h.slice(16,20),h.slice(20)].join('-');localStorage.setItem('civic-queue:id',client)}
+ let r=await fetch('/offices');if(!r.ok)throw Error();let d=await r.json();by('org').textContent=d.organization+' · 직원용';d.offices.forEach(card)}catch{by('message').textContent='화면을 열 수 없습니다. 연결과 브라우저 저장소 설정을 확인한 뒤 새로고침하세요.'}})()
+</script></html>
