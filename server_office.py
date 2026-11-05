@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QAbstractItemView,
 )
 from PyQt6.QtCore import QTimer, Qt, QLockFile, pyqtSignal, QSettings
-from app_common import data_dir
+from app_common import local_ips, data_dir
 from organization import ORGANIZATION
 from queue_core import QueueStore, QueueError, ALL_DEPTS
 from queue_api import HTTP_PORT, create_api, run_discovery
@@ -296,21 +296,39 @@ def main():
             QMessageBox.information(None, '실행 중', '호출기가 이미 실행 중입니다. 알림 영역에서 열어주세요.')
         return 0
     sockets = []
-    server = thread = discovery = None
+    server = thread = None
+    discovery_threads = []
     stop = threading.Event()
     try:
-        for kind, port in [(socket.SOCK_STREAM, HTTP_PORT), (socket.SOCK_DGRAM, 8001)]:
-            sock = socket.socket(socket.AF_INET, kind)
-            sockets.append(sock)
-            sock.bind(('0.0.0.0', port))
-        sockets[0].listen(128)
+        addresses = ["127.0.0.1"]
+        candidates = sorted(local_ips() - {"127.0.0.1", "0.0.0.0"})
+        if candidates:
+            selected = settings.value("listen_address", "")
+            if selected not in candidates + addresses:
+                selected, ok = QInputDialog.getItem(None, "호출기 연결 주소", "직원 PC가 접속할 내부망 주소를 선택하세요.", candidates + addresses, 0, False)
+                if not ok:
+                    return 0
+            settings.setValue("listen_address", selected)
+            if selected not in addresses:
+                addresses.append(selected)
+        listeners = []
+        for address in addresses:
+            for kind, port in [(socket.SOCK_STREAM, HTTP_PORT), (socket.SOCK_DGRAM, 8001)]:
+                sock = socket.socket(socket.AF_INET, kind)
+                sockets.append(sock)
+                sock.bind((address, port))
+                if kind == socket.SOCK_STREAM:
+                    sock.listen(128)
+                    listeners.append(sock)
+                else:
+                    discovery_threads.append(threading.Thread(target=run_discovery, args=(MANAGED_DEPTS, stop, sock), daemon=True))
         store = QueueStore(root / 'queue.sqlite3', MANAGED_DEPTS)
         window = MainWindow()
         server = uvicorn.Server(uvicorn.Config(create_api(store, window.focus_requested.emit), log_config=None, log_level='warning', access_log=False))
-        thread = threading.Thread(target=lambda: server.run(sockets=[sockets[0]]), daemon=True)
+        thread = threading.Thread(target=lambda: server.run(sockets=listeners), daemon=True)
         thread.start()
-        discovery = threading.Thread(target=run_discovery, args=(MANAGED_DEPTS, stop, sockets[1]), daemon=True)
-        discovery.start()
+        for discovery in discovery_threads:
+            discovery.start()
         window.show()
         return app.exec()
     except Exception as exc:
@@ -323,8 +341,9 @@ def main():
             server.should_exit = True
         if thread:
             thread.join(5)
-        if discovery:
-            discovery.join(2)
+        for discovery in discovery_threads:
+            if discovery.is_alive():
+                discovery.join(2)
         for sock in sockets:
             sock.close()
         if store and (not thread or not thread.is_alive()):
