@@ -17,6 +17,7 @@ def main():
     for module, name in [('server_office', '간부방호출기'), ('client_app', '직원용번호표')]:
         log = destination / (name + '-build.log')
         command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
+                   *(['--add-data', str(source / 'employee.html') + os.pathsep + '.'] if module == 'server_office' else []),
                    '--name', name, '--distpath', str(destination), '--workpath', str(destination / '_build' / module),
                    '--specpath', str(destination / '_spec'), str(source / (module + '.py'))]
         with log.open('w', encoding='utf-8') as output:

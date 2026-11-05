@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>직원 대기표</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f2f5f4;color:#183731;font:1rem/1.55 system-ui,"Malgun Gothic",sans-serif}main{max-width:36rem;margin:5vh auto;padding:1rem}header{border-bottom:2px solid #216b52;padding-bottom:.6rem}h1{margin:.1rem 0;font-size:2rem}small{color:#49655c}section{background:white;padding:1.4rem;margin:1rem 0;border:1px solid #d3dfda;border-radius:.6rem}h2{margin:0;font-size:1.5rem}label{display:block;margin:.7rem 0}input:not([type=checkbox]){display:block;width:100%;padding:.7rem;border:1px solid #83968e;border-radius:.3rem;font:inherit}button{background:#186447;color:white;border:0;border-radius:.3rem;padding:.75rem 1.2rem;font:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:default}#mine{font-size:1.45rem;font-weight:bold}#mine.called{padding:1rem;background:#ffecae;color:#453300}#error{color:#922d24}footer{font-size:.9rem}
+</style><main><header><small>직원용 · 내부망</small><h1>방문 대기표</h1></header>
+<section><h2 id="office">호출기 연결 중…</h2><p id="status"></p><div id="mine" role="status" aria-live="assertive"></div>
+<form id="join" hidden><label>이름<input id="name" maxlength="50" required autocomplete="off"></label><label>소속 (선택)<input id="dept" maxlength="80" autocomplete="off"></label><button>대기 등록</button></form>
+<button id="leave" hidden>대기 취소</button> <button id="ack" hidden>호출 확인</button></section>
+<p id="error" role="alert"></p><footer><label><input type="checkbox" id="sound"> 호출될 때 소리도 듣기</label>호출을 받으려면 이 탭을 열어 두세요. 탭을 닫거나 기기가 절전 상태이면 즉시 알릴 수 없습니다.</footer></main>
+<script>
+'use strict';
+const el=id=>document.getElementById(id),join=el('join'),leave=el('leave'),ack=el('ack'),error=el('error');
+let id,office,ticket,audio,busy=false,live=false,epoch=0,noticed='';
+function key(k){return 'civic-queue:'+k}
+function init(){
+ id=localStorage.getItem(key('id'));
+ if(!id){let b=crypto.getRandomValues(new Uint8Array(16));b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;const h=Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');id=[h.slice(0,8),h.slice(8,12),h.slice(12,16),h.slice(16,20),h.slice(20)].join('-');localStorage.setItem(key('id'),id)}
+}
+function tone(){if(audio?.state!=='running')return;const osc=audio.createOscillator(),gain=audio.createGain();osc.connect(gain);gain.connect(audio.destination);gain.gain.value=.12;osc.frequency.value=740;osc.start();gain.gain.exponentialRampToValueAtTime(.001,audio.currentTime+.65);osc.stop(audio.currentTime+.65)}
+el('sound').onchange=async e=>{if(!e.target.checked)return;try{audio??=new AudioContext();await audio.resume();tone()}catch{e.target.checked=false;error.textContent='이 브라우저에서는 소리를 켤 수 없습니다.'}};
+async function post(path,body={}){let controller=new AbortController(),timer=setTimeout(()=>controller.abort(),5000);try{let res=await fetch(path,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,client_id:id}),signal:controller.signal});if(!res.ok){let data=await res.json();throw Error(typeof data.detail==='string'?data.detail:'요청을 처리하지 못했습니다.')}return await res.json()}finally{clearTimeout(timer)}}
+function render(data){let s;[office,s]=Object.entries(data.offices)[0];ticket=s.ticket;live=true;el('office').textContent=office;el('status').textContent=[s.status,s.detail,'대기 '+s.count+'명'].filter(Boolean).join(' · ');
+ const waiting=ticket?.status==='waiting',called=ticket?.status==='called'&&localStorage.getItem(key('ack'))!==ticket.id;
+ el('mine').textContent=called?'호출되었습니다. '+office+'로 입장하세요.':waiting?'내 순번: '+s.position+'번째':({removed:'대기 명단에서 제외되었습니다.',cancelled:'대기를 취소했습니다.',called:'호출을 확인했습니다.'}[ticket?.status]||'');
+ el('mine').classList.toggle('called',called);document.title=(called?'호출되었습니다 · ':'')+office+' 대기표';join.hidden=waiting||called;join.querySelector('button').disabled=s.status==='휴가'||busy;leave.hidden=!waiting;leave.disabled=busy;ack.hidden=!called;
+ if(called&&noticed!==ticket.id){noticed=ticket.id;if(el('sound').checked)tone()}}
+function offline(){live=false;join.querySelector('button').disabled=true;leave.disabled=true;error.textContent='호출기 연결이 끊겼습니다. 다시 연결하는 중입니다.'}
+async function refresh(){if(busy)return;const seq=++epoch;try{const d=await post('/v2/state');if(seq===epoch){error.textContent='';render(d)}}catch{if(seq===epoch)offline()}}
+async function act(path,body){if(!live||busy)return;busy=true;++epoch;join.querySelector('button').disabled=leave.disabled=true;let msg='';try{await post(path,body)}catch(e){msg=e.message}finally{busy=false;await refresh();if(msg&&live)error.textContent=msg}}
+join.onsubmit=e=>{e.preventDefault();if(el('name').value.trim())act('/v2/join/'+encodeURIComponent(office),{name:el('name').value.trim(),department:el('dept').value.trim()})};
+leave.onclick=()=>act('/v2/leave/'+encodeURIComponent(office),{ticket_id:ticket.id});ack.onclick=()=>{localStorage.setItem(key('ack'),ticket.id);refresh()};
+try{init();(async function poll(){await refresh();setTimeout(poll,2000)})();document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()})}catch{error.textContent='브라우저 저장소를 사용할 수 없습니다. 사이트 데이터 저장을 허용해 주세요.'}
+</script></html>

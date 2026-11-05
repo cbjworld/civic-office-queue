@@ -1,9 +1,10 @@
 """Employee API. Administrator actions stay inside the office application."""
+from pathlib import Path
 import socket
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from queue_core import QueueError
@@ -26,6 +27,11 @@ class LeaveRequest(Identity):
 
 def create_api(store, focus=None):
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    page = Path(__file__).with_name("employee.html").read_text(encoding="utf-8-sig")
+    @app.get("/", response_class=HTMLResponse)
+    async def employee_page():
+        return HTMLResponse(page, headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"})
 
     @app.exception_handler(QueueError)
     async def queue_error(request, exc):
