@@ -1,0 +1,11 @@
+__pycache__/
+.venv/
+*.sqlite*
+*.ini
+*.lic
+*.log
+*.exe
+.env*
+release/
+build/
+dist/
